@@ -10,6 +10,18 @@
 //    does not carry the access_key;
 //  - the PlayViewUnite gRPC call needs base64 protobuf metadata headers and
 //    a 5-byte (flag + uint32 BE length) grpc frame.
+//
+// The bilibili CDN (upos-*, cn-*-cm, mountaintoys PCDN) only serves
+// platform=android stream URLs when the request carries the Android app
+// User-Agent: desktop UAs get 403 regardless of Referer (the mcdn hosts
+// tolerate any UA). The hydration fetches below must send it, and
+// background.js rewrites the page's segment requests to it via
+// DNR/webRequest. This file loads before background.js in both the Firefox
+// manifest script list and the Chrome bundle, so the const is defined by the
+// time the header rewriting code runs.
+const BILI_APP_UA =
+  "Mozilla/5.0 BiliDroid/7.76.0 (bbcall@bilibili.com; 11) os/android model/XQ-AT72 " +
+  "mobi_app/android build/7760700 osVer/30 network/2";
 
 const BiliNative = (() => {
   'use strict';
@@ -484,7 +496,7 @@ const BiliNative = (() => {
 
   async function hydrateSegmentBase(baseUrl) {
     try {
-      const response = await fetch(baseUrl, { headers: { Range: 'bytes=0-65535' } });
+      const response = await fetch(baseUrl, { headers: { Range: 'bytes=0-65535', 'User-Agent': BILI_APP_UA } });
       if (response.status !== 200 && response.status !== 206) {
         console.log('[BiliWAS] hydrate HTTP', response.status, baseUrl.slice(0, 90));
         return null;

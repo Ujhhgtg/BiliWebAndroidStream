@@ -14,13 +14,15 @@ const requestOrigins = new Map();
 //     completely stock browser headers; mutating them 403s and wedges the
 //     player on "Timeout:20s" before the helper's response even arrives.
 //   - the Android stream URLs (platform=android) 403 as soon as the request
-//     carries a Referer, on most CDN families (upos-*, cn-*-cm, mountaintoys
-//     PCDN) while the mcdn hosts tolerate it.
+//     carries a Referer or a desktop User-Agent (the CDN now requires the
+//     app's own UA: BILI_APP_UA, defined in native-api.js which loads before
+//     this file), on most CDN families (upos-*, cn-*-cm, mountaintoys PCDN)
+//     while the mcdn hosts tolerate both.
 // So only touch the requests that are actually ours: strip Referer (and the
-// Sec-Fetch metadata, which some edges dislike) from Android-platform URLs and
-// leave every other request exactly as the page issued it. Origin stays: CDN
-// mirrors echo it into Access-Control-Allow-Origin, which the cross-origin
-// segment XHRs need.
+// Sec-Fetch metadata, which some edges dislike) and send the app User-Agent
+// on Android-platform URLs, and leave every other request exactly as the page
+// issued it. Origin stays: CDN mirrors echo it into
+// Access-Control-Allow-Origin, which the cross-origin segment XHRs need.
 // Match the android-platform marker on ANY host: the gRPC reply may return
 // PCDN proxies on arbitrary domains (e.g. nexusedgeio.com proxies), which are
 // indistinguishable from official CDN hosts by domain alone. The platform
@@ -54,7 +56,8 @@ if (chrome.runtime.getManifest().manifest_version >= 3) {
             { header: "Referer", operation: "remove" },
             { header: "Sec-Fetch-Site", operation: "remove" },
             { header: "Sec-Fetch-Mode", operation: "remove" },
-            { header: "Sec-Fetch-Dest", operation: "remove" }
+            { header: "Sec-Fetch-Dest", operation: "remove" },
+            { header: "User-Agent", operation: "set", value: BILI_APP_UA }
           ]
         },
         condition: {
@@ -84,6 +87,7 @@ if (chrome.runtime.getManifest().manifest_version >= 3) {
     return {
       requestHeaders: (details.requestHeaders || [])
         .filter((header) => !["referer", "sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest"].includes(header.name.toLowerCase()))
+        .concat([{ name: "User-Agent", value: BILI_APP_UA }])
     };
   };
   try {
