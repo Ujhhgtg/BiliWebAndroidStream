@@ -213,5 +213,13 @@ messaging.runtime.onMessage.addListener((message, sender) => {
       .catch((error) => ({ type: "error", code: "set_buvid_failed", message: String(error) }));
   }
 
+  if (message.type === "open-options") {
+    // The login action inside the player's failure toast; options.html hosts the
+    // QR login, and content scripts cannot call openOptionsPage themselves.
+    const opened = chrome.runtime.openOptionsPage();
+    if (opened && typeof opened.catch === "function") opened.catch(() => {});
+    return Promise.resolve({ type: "options_opened" });
+  }
+
   return undefined;
 });

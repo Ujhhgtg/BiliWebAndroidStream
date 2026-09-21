@@ -30,6 +30,9 @@ const BiliNative = (() => {
   // value never comes back through get), so storage goes through `browser`,
   // which Firefox defines natively and Chrome can alias from chrome.
   const storageApi = globalThis.browser || globalThis.chrome;
+  // Same story for chrome.cookies: Firefox's callback-only `chrome` namespace
+  // does not return promises.
+  const cookiesApi = globalThis.browser || globalThis.chrome;
 
   const APP_KEY = '4409e2ce8ffd12b8';
   const APP_SECRET = '59b43e04ad6965f34319062b478f83dd';
@@ -81,6 +84,17 @@ const BiliNative = (() => {
   async function clearToken() {
     await storageApi.storage.local.remove(STORAGE_KEY).catch(() => {});
     return { type: 'token_cleared' };
+  }
+
+  // SESSDATA is HttpOnly, so only the background can tell whether the user is
+  // logged in on the website at all; the login hint's copy depends on it.
+  async function webLoginState() {
+    try {
+      const cookie = await cookiesApi.cookies.get({ url: 'https://www.bilibili.com/', name: 'SESSDATA' });
+      return Boolean(cookie && cookie.value);
+    } catch (_) {
+      return null;
+    }
   }
 
   function fallbackBuvid() {
@@ -560,7 +574,11 @@ const BiliNative = (() => {
     console.log('[BiliWAS] resolvePlayUrl qn', request.qn, 'fnval', request.fnval, 'cid', request.cid, 'bvid', request.bvid, 'aid', request.aid);
     const token = await loadToken();
     if (!token) {
-      return errorBody('missing_token', 'a token is required before requesting playback');
+      const body = errorBody('missing_token', 'a token is required before requesting playback');
+      // A website login alone still cannot reach the VIP qualities, so the page
+      // bridge phrases its hint differently for a logged-out visitor.
+      body.web_login = await webLoginState();
+      return body;
     }
     if (
       token.expires_at &&

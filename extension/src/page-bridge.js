@@ -6,6 +6,14 @@
   let nextId = 1;
   const pending = new Map();
 
+  // Quality ids → short labels, used where the official response carries no
+  // description for a quality (see mergeAndroidIntoOfficial and the login hint).
+  const qualityLabel = (quality) => ({
+    16: "360P", 32: "480P", 64: "720P", 74: "720P 60帧", 80: "1080P",
+    112: "1080P 高码率", 116: "1080P 60帧", 120: "4K", 125: "HDR",
+    126: "杜比视界", 127: "8K"
+  }[quality] || `${quality}P`);
+
   function rewriteAccountBody(body) {
     if (!body || body.code !== 0 || !body.data) return body;
     const data = body.data;
@@ -56,12 +64,14 @@
       let nativeEvent;
       const finish = () => {
         if (!nativeDone || !helperDone) return;
+        let officialBody = null;
+        try { officialBody = JSON.parse(xhr.responseText); } catch (_) {}
         if (helperAnswer?.ok && helperAnswer.android) {
-          let officialBody = null;
-          try { officialBody = JSON.parse(xhr.responseText); } catch (_) {}
           const merged = mergeAndroidIntoOfficial(officialBody, helperAnswer.android, helperAnswer.requestedQuality);
           console.log('[BiliWAS] xhr merge answer.ok', helperAnswer.ok, 'code', helperAnswer.code || '', 'merged', merged ? merged.data.quality : 'null');
           if (merged) replaceXhrJson(xhr, merged);
+        } else {
+          hintMissingLogin(officialBody, helperAnswer, requestedQualityOf(xhr.__biliWebAndroidStreamRequestUrl, body));
         }
         if (typeof onLoadEnd === "function") onLoadEnd.call(xhr, nativeEvent);
       };
@@ -167,11 +177,6 @@
     // official response instead (e.g. PCDN hosts that the background cannot
     // reach yield only low-qin streams).
     if (requestedQuality && target.id < requestedQuality) return null;
-    const qualityLabel = (quality) => ({
-      16: "360P", 32: "480P", 64: "720P", 74: "720P 60帧", 80: "1080P",
-      112: "1080P 高码率", 116: "1080P 60帧", 120: "4K", 125: "HDR",
-      126: "杜比视界", 127: "8K"
-    }[quality] || `${quality}P`);
     // The quality menu must come from the official response, not from the
     // Android stream list: the Android playurl only includes representations
     // at or below the requested qn (8K appears solely when qn=127 is asked
@@ -213,10 +218,40 @@
     return body;
   }
 
-  function askHelper(url, method, body) {
-    const id = nextId++;
-    const parsed = new URL(url, window.location.href);
-    const params = parsed.searchParams;
+  // A manual quality switch fails when the official web response cannot reach
+  // the requested quality and the Android helper has no token to fill it in.
+  // The player is about to report that terse failure on its own, so say what is
+  // actually missing first: a phone QR login. This is only the "no token at
+  // all" case — a token that merely lacks a privilege (大会员) is not a login
+  // problem — and a request the official response satisfies never reaches here,
+  // so switches the page can serve on its own stay quiet.
+  function hintMissingLogin(officialBody, answer, requestedQuality) {
+    if (!requestedQuality) return;
+    if (answer && answer.ok && answer.android) return;
+    if (!answer || answer.code !== "missing_token") return;
+    const official = officialBody && officialBody.data;
+    const delivered = official ? official.quality : null;
+    if (typeof delivered !== "number" || requestedQuality <= delivered) return;
+    const qualities = Array.isArray(official.accept_quality) ? official.accept_quality : [];
+    const descriptions = Array.isArray(official.accept_description) ? official.accept_description : [];
+    const index = qualities.indexOf(requestedQuality);
+    const label = (index >= 0 && descriptions[index]) || qualityLabel(requestedQuality);
+    console.log('[BiliWAS] login hint qn', requestedQuality, 'official quality', delivered, 'web login', answer.web_login);
+    window.postMessage({
+      source: "biliwebandroidstream-page",
+      type: "bili-login-hint",
+      quality: requestedQuality,
+      label,
+      // Logged out on the website, the user has one step to take first; logged
+      // in, the missing piece is the phone QR login specifically.
+      webLogin: answer.web_login === true
+    }, "*");
+  }
+
+  // The playurl request carries its parameters in the query string, the body,
+  // or both; the helper is asked about the union of the two.
+  function requestParams(url, body) {
+    const params = new URL(url, window.location.href).searchParams;
     if (typeof body === "string" && body) {
       try {
         for (const [key, value] of new URLSearchParams(body)) {
@@ -224,6 +259,17 @@
         }
       } catch (_) {}
     }
+    return params;
+  }
+
+  function requestedQualityOf(url, body) {
+    const qn = requestParams(url, body).get("qn");
+    return qn ? Number(qn) : null;
+  }
+
+  function askHelper(url, method, body) {
+    const id = nextId++;
+    const params = requestParams(url, body);
     return new Promise((resolve) => {
       pending.set(id, resolve);
       window.postMessage({
@@ -293,6 +339,8 @@
           headers: { "content-type": "application/json; charset=utf-8" }
         });
       }
+    } else {
+      hintMissingLogin(officialBody, answer, requestedQualityOf(url, requestBody));
     }
     if (officialResponse) return officialResponse;
     return nativeFetch(input, init);
